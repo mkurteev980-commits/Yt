@@ -1,0 +1,21 @@
+{
+  "name": "comet-short",
+  "private": true,
+  "type": "module",
+  "scripts": { "studio": "remotion studio" },
+  "dependencies": {
+    "@react-three/fiber": "^9.1.2",
+    "@react-three/postprocessing": "^3.0.4",
+    "@remotion/bundler": "4.0.547",
+    "@remotion/cli": "4.0.547",
+    "@remotion/google-fonts": "4.0.547",
+    "@remotion/renderer": "4.0.547",
+    "@remotion/three": "4.0.547",
+    "postprocessing": "^6.37.3",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.547",
+    "three": "0.176.0"
+  },
+  "devDependencies": { "@types/react": "19.1.8", "@types/three": "0.176.0", "typescript": "5.8.3" }
+}
