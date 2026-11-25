@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Blocky cast — look test</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">{ "imports": { "three": "./three.module.js" } }</script>
+</head>
+<body>
+<script type="module">
+// Look test for our own blocky cast (not Roblox): big rounded-cube heads with drawn cartoon faces, chunky bodies,
+// mitten hands, toon shading with a soft ink outline, in a sunny suburban street. Everything is code.
+import * as THREE from "three";
+import { RoundedBoxGeometry } from "./addons/RoundedBoxGeometry.js";
+
+const W = 720, H = 960;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(W, H); renderer.setPixelRatio(1);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(38, W / H, 0.1, 500);
+
+// sky gradient
+const skyC = document.createElement("canvas"); skyC.width = 2; skyC.height = 256;
+const sg = skyC.getContext("2d"), gr = sg.createLinearGradient(0, 0, 0, 256);
+gr.addColorStop(0, "#2f7fe0"); gr.addColorStop(0.6, "#7fb8f2"); gr.addColorStop(1, "#cfe6fb");
+sg.fillStyle = gr; sg.fillRect(0, 0, 2, 256);
+const skyT = new THREE.CanvasTexture(skyC); skyT.colorSpace = THREE.SRGBColorSpace; scene.background = skyT;
+scene.fog = new THREE.Fog("#cfe6fb", 40, 140);
+
+// lights
+scene.add(new THREE.HemisphereLight("#dff0ff", "#7a8a5a", 1.3));
+const sun = new THREE.DirectionalLight("#fff3dc", 2.6);
+sun.position.set(-12, 22, 14); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -20, right: 20, top: 20, bottom: -20, near: 1, far: 80 }); sun.shadow.bias = -0.0005;
+scene.add(sun);
+
+// toon material with 3 bands
+const gm = new Uint8Array([90, 170, 255]); const grad = new THREE.DataTexture(gm, 3, 1, THREE.RedFormat); grad.needsUpdate = true;
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+const toon = (c, map) => new THREE.MeshToonMaterial({ color: c, gradientMap: grad, map: map ?? null });
+const inkM = new THREE.MeshBasicMaterial({ color: "#1b1622", side: THREE.BackSide });
+/** mesh + inverted-hull outline */
+const part = (geo, mat, ink = 0.035) => {
+  const g = new THREE.Group(), m = new THREE.Mesh(geo, mat);
+  m.castShadow = true; m.receiveShadow = true; g.add(m);
+  if (ink) { const o = new THREE.Mesh(geo, inkM); o.scale.setScalar(1 + ink); g.add(o); }
+  return g;
+};
+const rbox = (w, h, d, r = 0.08) => new RoundedBoxGeometry(w, h, d, 4, r);
+
+/** cartoon face drawn on a canvas (eyes with highlights, brows, mouth) */
+const faceTex = (o) => {
+  const c = document.createElement("canvas"); c.width = c.height = 512; const g = c.getContext("2d");
+  g.clearRect(0, 0, 512, 512);
+  const eye = (x) => {
+    g.fillStyle = "#ffffff"; g.beginPath(); g.ellipse(x, 250, 58, o.squint ? 40 : 70, 0, 0, Math.PI * 2); g.fill();
+    g.lineWidth = 12; g.strokeStyle = "#1b1622"; g.stroke();
+    g.fillStyle = o.iris; g.beginPath(); g.ellipse(x + o.look * 14, 262, 34, o.squint ? 28 : 40, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#1b1622"; g.beginPath(); g.ellipse(x + o.look * 16, 266, 20, o.squint ? 18 : 24, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#ffffff"; g.beginPath(); g.ellipse(x + o.look * 16 - 12, 248, 9, 11, 0, 0, Math.PI * 2); g.fill();
+  };
+  eye(176); eye(336);
+  g.lineCap = "round"; g.strokeStyle = o.brow; g.lineWidth = 22;
+  for (const [x, s] of [[176, -1], [336, 1]]) { g.beginPath(); g.moveTo(x - 50, 150 + o.browTilt * s * -14); g.lineTo(x + 50, 150 + o.browTilt * s * 14); g.stroke(); }
+  g.lineWidth = 14; g.strokeStyle = "#1b1622"; g.fillStyle = "#7a1f2b";
+  if (o.mouth === "grin") { g.beginPath(); g.moveTo(186, 370); g.quadraticCurveTo(256, 470, 326, 370); g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = "#fff"; g.fillRect(200, 372, 112, 18); }
+  else if (o.mouth === "smile") { g.beginPath(); g.arc(256, 340, 70, 0.2 * Math.PI, 0.8 * Math.PI); g.stroke(); }
+  else { g.beginPath(); g.ellipse(256, 395, 30, 38, 0, 0, Math.PI * 2); g.fill(); g.stroke(); }
+  if (o.glasses) { g.lineWidth = 12; g.strokeStyle = "#3a2a20"; for (const x of [176, 336]) { g.beginPath(); g.arc(x, 255, 78, 0, Math.PI * 2); g.stroke(); } g.beginPath(); g.moveTo(254, 250); g.lineTo(258, 250); g.stroke(); }
+  if (o.blush) { g.fillStyle = "rgba(255,120,120,0.35)"; for (const x of [120, 392]) { g.beginPath(); g.ellipse(x, 340, 36, 20, 0, 0, Math.PI * 2); g.fill(); } }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+};
+
+/** one of our characters. o: colours, hair kind, face, pose angles */
+const person = (o) => {
+  const root = new THREE.Group();
+  const skin = toon(o.skin), top = toon(o.top), pants = toon(o.pants), shoe = toon(o.shoe), hairM = toon(o.hair);
+  const legL = 0.85, hip = 0.12 + legL;
+  for (const s of [-1, 1]) {
+    const leg = new THREE.Group(); leg.position.set(s * 0.22, hip, 0); leg.rotation.x = (o.legs?.[s > 0 ? 1 : 0] ?? 0);
+    const l = part(rbox(0.36, legL, 0.4, 0.07), pants); l.position.y = -legL / 2; leg.add(l);
+    const f = part(rbox(0.4, 0.2, 0.55, 0.08), shoe); f.position.set(0, -legL - 0.02, 0.06); leg.add(f);
+    root.add(leg);
+  }
+  const body = part(rbox(0.95, 1.0, 0.56, 0.12), top); body.position.y = hip + 0.5; root.add(body);
+  if (o.stripe) { const st = part(rbox(0.97, 0.16, 0.58, 0.05), toon(o.stripe), 0); st.position.y = hip + 0.55; root.add(st); }
+  for (const s of [-1, 1]) {
+    const arm = new THREE.Group(); arm.position.set(s * 0.64, hip + 0.9, 0);
+    const [ax, az] = o.arms[s > 0 ? 1 : 0]; arm.rotation.set(ax, 0, az * s);
+    const a = part(rbox(0.3, 0.8, 0.34, 0.07), top); a.position.y = -0.38; arm.add(a);
+    const h = part(new THREE.SphereGeometry(0.2, 20, 14), skin); h.position.y = -0.86; h.scale.set(1, 1.05, 1); arm.add(h);
+    root.add(arm);
+  }
+  const head = new THREE.Group(); head.position.y = hip + 1.0 + 0.62; head.rotation.set(o.headTilt?.[0] ?? 0, o.headTilt?.[1] ?? 0, o.headTilt?.[2] ?? 0);
+  head.add(part(rbox(1.15, 1.1, 1.05, 0.22), skin, 0.03));
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.0), new THREE.MeshToonMaterial({ map: faceTex(o.face), transparent: true, gradientMap: grad }));
+  face.position.z = 0.531; head.add(face);
+  // hair: chunky blocks
+  if (o.hairKind === "spiky") {
+    const cap = part(rbox(1.22, 0.36, 1.12, 0.12), hairM); cap.position.y = 0.48; head.add(cap);
+    for (let i = 0; i < 5; i++) { const sp = part(rbox(0.3, 0.34, 0.5, 0.08), hairM); sp.position.set(-0.45 + i * 0.22, 0.72, -0.05); sp.rotation.set(-0.3, 0, (i - 2) * 0.2); head.add(sp); }
+    const fr = part(rbox(1.0, 0.18, 0.2, 0.06), hairM); fr.position.set(0, 0.4, 0.5); fr.rotation.x = 0.3; head.add(fr);
+  } else if (o.hairKind === "pony") {
+    const cap = part(rbox(1.24, 0.42, 1.14, 0.14), hairM); cap.position.y = 0.46; head.add(cap);
+    const side = part(rbox(1.26, 0.6, 0.5, 0.1), hairM); side.position.set(0, 0.15, -0.35); head.add(side);
+    const tail = part(rbox(0.32, 0.8, 0.32, 0.12), hairM); tail.position.set(0, 0.0, -0.75); tail.rotation.x = 0.5; head.add(tail);
+    const band = part(rbox(0.36, 0.12, 0.36, 0.05), toon("#ffd447"), 0.02); band.position.set(0, 0.42, -0.62); head.add(band);
+  } else if (o.hairKind === "bald") {
+    for (const s of [-1, 1]) { const tuft = part(rbox(0.16, 0.42, 0.7, 0.06), hairM); tuft.position.set(s * 0.6, 0.1, -0.1); head.add(tuft); }
+    const mus = part(rbox(0.5, 0.12, 0.12, 0.05), hairM, 0.02); mus.position.set(0, -0.2, 0.55); head.add(mus);
+  }
+  root.add(head);
+  root.position.set(...o.pos); root.rotation.y = o.yaw ?? 0;
+  scene.add(root);
+};
+
+// ---- world ----
+const plane = (w, d, col, y = 0) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), toon(col)); m.rotation.x = -Math.PI / 2; m.position.y = y; m.receiveShadow = true; scene.add(m); return m; };
+plane(300, 300, "#5fb84a");
+const walk = plane(300, 3.2, "#d9d5cc", 0.01); walk.position.z = 2.5;
+const road = plane(300, 9, "#56595f", 0.005); road.position.z = 9;
+for (let x = -60; x < 60; x += 4) { const l = plane(2, 0.25, "#f2e7c4", 0.012); l.position.set(x, 0.012, 9); }
+const box = (w, h, d, col, x, y, z, ink = 0.01) => { const p = part(rbox(w, h, d, Math.min(0.12, w / 8)), toon(col), ink); p.position.set(x, y, z); scene.add(p); return p; };
+const winTex = (() => { const c = document.createElement("canvas"); c.width = 128; c.height = 128; const g = c.getContext("2d");
+  g.fillStyle = "#f4f1ea"; g.fillRect(0, 0, 128, 128); g.fillStyle = "#3f78b8"; g.fillRect(12, 12, 104, 104);
+  g.fillStyle = "rgba(255,255,255,0.4)"; g.fillRect(24, 20, 16, 88); g.fillStyle = "#f4f1ea"; g.fillRect(60, 12, 8, 104); g.fillRect(12, 60, 104, 8);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+const house = (x, z, wall, roof, w = 8, h = 4.6) => {
+  box(w, h, 7, wall, x, h / 2, z);
+  const rg = new THREE.CylinderGeometry(0.01, 4.6, 2.6, 4, 1); rg.rotateY(Math.PI / 4); rg.scale(w / 6.4, 1, 7.6 / 6.4);
+  const r = part(rg, toon(roof), 0.012); r.position.set(x, h + 1.3, z); scene.add(r);
+  for (const wx of [-w / 4, w / 4]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), toon("#ffffff", winTex)); m.position.set(x + wx, h * 0.62, z + 3.51); scene.add(m); }
+  box(1.3, 2.3, 0.15, "#8a4b2f", x, 1.15, z + 3.52, 0.02);
+  box(2.2, 0.25, 1.2, "#cfc9bd", x, 0.12, z + 4.1, 0.02);
+};
+house(-9.5, -6, "#e9d7b0", "#c85b4a");
+house(0.5, -8, "#9fc3e6", "#5e6a80");
+house(11, -6, "#f0b8a8", "#7c5b46");
+// fence + tree + mailbox
+for (let x = -14; x < 16; x += 1.1) box(0.18, 0.9, 0.18, "#ffffff", x, 0.45, 0.45, 0.02);
+box(30, 0.14, 0.12, "#ffffff", 1, 0.75, 0.45, 0); box(30, 0.14, 0.12, "#ffffff", 1, 0.35, 0.45, 0);
+const trunk = part(new THREE.CylinderGeometry(0.28, 0.38, 3, 10), toon("#7b5134"), 0.02); trunk.position.set(6.2, 1.5, -1.2); scene.add(trunk);
+for (const [x, y, z, r] of [[6.2, 3.9, -1.2, 1.7], [5.2, 3.4, -0.8, 1.2], [7.1, 3.5, -1.5, 1.25], [6.3, 4.8, -1.4, 1.1]]) {
+  const s = part(new THREE.SphereGeometry(r, 24, 16), toon("#3f9a3c"), 0.03); s.position.set(x, y, z); scene.add(s);
+}
+box(0.14, 1.2, 0.14, "#5b4636", -4.5, 0.6, 1.0, 0.02); box(0.5, 0.42, 0.75, "#2f5fa8", -4.5, 1.35, 1.0, 0.03);
+
+// ---- cast ----
+person({ pos: [-1.55, 0, 3.0], yaw: 0.35, skin: "#f6c9a0", top: "#f07a2a", stripe: "#ffffff", pants: "#3b5ba8", shoe: "#f4f1ea", hair: "#6b3f22", hairKind: "spiky",
+  arms: [[0, 0.12], [0, 2.55]], headTilt: [0, 0.1, 0.08], legs: [0.05, -0.05],
+  face: { iris: "#4a2e1a", brow: "#4a2e1a", browTilt: -0.4, mouth: "grin", look: 0.3, blush: true } });
+person({ pos: [0.9, 0, 3.4], yaw: -0.15, skin: "#c98d62", top: "#8a5ad8", pants: "#2fa7a0", shoe: "#ffffff", hair: "#2a1d18", hairKind: "pony",
+  arms: [[-1.35, 0.15], [0, 0.18]], headTilt: [0, -0.15, -0.06],
+  face: { iris: "#3a2516", brow: "#2a1d18", browTilt: 0.2, mouth: "smile", look: -0.6, blush: true } });
+person({ pos: [3.3, 0, 2.7], yaw: -0.45, skin: "#f2d2b6", top: "#4f8a4a", pants: "#6b6f78", shoe: "#3a2a20", hair: "#e8e8ea", hairKind: "bald",
+  arms: [[0.15, 0.55], [0.15, 0.55]], headTilt: [0.05, -0.2, 0],
+  face: { iris: "#3a4e6a", brow: "#cfcfd4", browTilt: 0.5, mouth: "o", look: -0.4, glasses: true, squint: false } });
+
+cam.position.set(0.85, 2.5, 16.2); cam.lookAt(0.85, 2.1, 2.8);
+renderer.render(scene, cam);
+document.title = "READY";
+</script>
+</body>
+</html>
