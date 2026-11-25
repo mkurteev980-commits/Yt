@@ -7,7 +7,7 @@
   @font-face { font-family: "Fredoka"; src: url("fonts/fredoka-latin-700-normal.woff2") format("woff2"); font-weight: 700; }
   html,body{margin:0;background:#000;overflow:hidden} canvas{display:block}
 </style>
-<script type="importmap">{ "imports": { "three": "./three.module.js" } }</script>
+<script type="importmap">{ "imports": { "three": "./three.module.js", "three/addons/": "./jsm/" } }</script>
 </head>
 <body>
 <canvas id="out"></canvas>
@@ -16,6 +16,14 @@
 // captions with coloured key words. render(t) is a pure function of time (frames are captured by scripts/capture.mjs).
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "./addons/RoundedBoxGeometry.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
+import { Sky } from "three/addons/objects/Sky.js";
 
 const W = 1080, H = 1440, DUR = 15.3;
 const out = document.getElementById("out"); out.width = W; out.height = H;
@@ -55,8 +63,8 @@ const skyTex = (stops, cloud) => tex(512, 1024, (g, w, h) => {
 });
 const LOOKS = {
   day: { sky: skyTex([[0, "#1f6fd6"], [0.55, "#5ea6ee"], [1, "#bfe0fb"]], "rgba(255,255,255,0.55)"), fog: "#bfe0fb", sun: "#fff4e0", sunI: 3.2, hemi: ["#d6ecff", "#6f8a52", 1.15], el: 50, exp: 1.15 },
-  dawn: { sky: skyTex([[0, "#3d5aa8"], [0.5, "#e98a8a"], [1, "#ffcf8a"]], "rgba(255,210,190,0.55)"), fog: "#f2b98f", sun: "#ffb46a", sunI: 3.6, hemi: ["#ffd2b0", "#6a5a6a", 0.9], el: 9, exp: 1.1 },
-  dusk: { sky: skyTex([[0, "#2e3f8f"], [0.5, "#d9708a"], [1, "#ffb067"]], "rgba(255,190,170,0.5)"), fog: "#e9a37f", sun: "#ff9a52", sunI: 3.8, hemi: ["#ffc6a8", "#5d4f6b", 0.85], el: 8, exp: 1.12 },
+  dawn: { sky: skyTex([[0, "#3d5aa8"], [0.5, "#e98a8a"], [1, "#ffcf8a"]], "rgba(255,210,190,0.55)"), fog: "#f6c7a2", sun: "#ffbe7a", sunI: 3.4, hemi: ["#ffe0c4", "#7a6a7a", 1.3], el: 12, exp: 1.1 },
+  dusk: { sky: skyTex([[0, "#2e3f8f"], [0.5, "#d9708a"], [1, "#ffb067"]], "rgba(255,190,170,0.5)"), fog: "#f0b896", sun: "#ffa55e", sunI: 3.6, hemi: ["#ffd8c0", "#7a6a8a", 1.35], el: 12, exp: 1.12 },
 };
 scene.fog = new THREE.Fog("#bfe0fb", 45, 170);
 const hemi = new THREE.HemisphereLight("#d6ecff", "#6f8a52", 1.15); scene.add(hemi);
@@ -64,12 +72,17 @@ const sun = new THREE.DirectionalLight("#fff4e0", 3.2);
 sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = 4;
 Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, near: 1, far: 120 }); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
 scene.add(sun, sun.target);
+const sky = new Sky(); sky.scale.setScalar(4000); scene.add(sky);
+const SKYP = { day: [1.4, 2.6, 0.003, 0.78], dawn: [4, 2.2, 0.005, 0.84], dusk: [4.5, 2.4, 0.005, 0.85] };
 const applyLook = (name, az = -35) => {
-  const L = LOOKS[name]; scene.background = L.sky; scene.fog.color.set(L.fog);
+  const L = LOOKS[name]; sky.visible = name !== "day"; scene.background = name === "day" ? L.sky : null; scene.fog.color.set(L.fog); scene.fog.far = 330;
+  const [tb, ray, mie, mg] = SKYP[name], u = sky.material.uniforms;
+  u.turbidity.value = tb; u.rayleigh.value = ray; u.mieCoefficient.value = mie; u.mieDirectionalG.value = mg;
   sun.color.set(L.sun); sun.intensity = L.sunI; hemi.color.set(L.hemi[0]); hemi.groundColor.set(L.hemi[1]); hemi.intensity = L.hemi[2];
   const el = THREE.MathUtils.degToRad(L.el), a = THREE.MathUtils.degToRad(az);
   sun.position.set(Math.sin(a) * Math.cos(el) * 60, Math.sin(el) * 60, Math.cos(a) * Math.cos(el) * 60); sun.target.position.set(0, 0, 0);
-  renderer.toneMappingExposure = L.exp;
+  renderer.toneMappingExposure = L.exp * (name === "day" ? 0.78 : 1.0);
+  u.sunPosition.value.copy(sun.position).normalize();
 };
 
 // ---------------- the street ----------------
@@ -121,6 +134,45 @@ const tree = (x, z, s = 1) => {
   }
 };
 tree(6.6, -2.0); tree(-6.3, -2.2, 0.85); tree(19, -2, 1.1); tree(-19, -2.5, 1.0);
+// mountains far behind the town
+for (let i = 0; i < 9; i++) {
+  const h = 45 + rnd() * 40, r = 40 + rnd() * 30, x = -230 + i * 58 + rnd() * 20, z = -200 - rnd() * 60;
+  const m = mesh(new THREE.ConeGeometry(r, h, 7), std({ color: "#7d8ea6", flatShading: true, roughness: 1 }), false); m.position.set(x, h / 2 - 2, z); m.rotation.y = rnd() * 3; scene.add(m);
+  const c = mesh(new THREE.ConeGeometry(r * 0.38, h * 0.38, 7), std({ color: "#f4f7fb", flatShading: true, roughness: 1 }), false); c.position.set(x, h - h * 0.19 - 1.6, z); c.rotation.y = m.rotation.y; scene.add(c);
+}
+// second row of houses + trees behind
+const roofs = ["#3f4650", "#6b4a3a", "#4a5260", "#7a3b32"], walls = ["#e8dcc4", "#c9d8e8", "#e9c9a8", "#d8d0c4", "#b8c9a8"];
+for (let x = -44; x <= 44; x += 11) {
+  const w = 8 + rnd() * 2, h = 4.5 + rnd() * 2, z = -24 - rnd() * 3;
+  const b = mesh(new THREE.BoxGeometry(w, h, 7), std({ color: walls[Math.floor(rnd() * walls.length)] })); b.position.set(x + rnd() * 2, h / 2, z); scene.add(b);
+  const r = gable(w, 7, 2.6, roofs[Math.floor(rnd() * roofs.length)]); r.position.set(b.position.x, h, z); scene.add(r);
+  tree(x + 5.5, z + 5 + rnd() * 2, 0.9 + rnd() * 0.3);
+}
+for (const x of [-24, -15, 24, 30]) tree(x, -3 + rnd() * 2, 0.9 + rnd() * 0.3);
+// soft 3D clouds
+const cloudM = std({ color: "#ffffff", roughness: 1 });
+for (let i = 0; i < 12; i++) {
+  const g = new THREE.Group(), cx = -160 + rnd() * 320, cy = 45 + rnd() * 30, cz = -90 - rnd() * 90;
+  for (let k = 0; k < 6; k++) { const s2 = 5 + rnd() * 6, b = mesh(new THREE.IcosahedronGeometry(s2, 2), cloudM, false); b.position.set((k - 2.5) * 5 + rnd() * 3, rnd() * 3, rnd() * 4); b.scale.y = 0.65; g.add(b); }
+  g.position.set(cx, cy, cz); scene.add(g);
+}
+// bushes with flowers along the fences (not in the building yard)
+const flowerCols = ["#ff5a7a", "#ffd23f", "#ffffff", "#b07cff"];
+for (const x of [-14.5, -12, -9.5, -4.2, 4.2, 9.5, 12, 14.5]) {
+  const b = mesh(new THREE.IcosahedronGeometry(0.8, 2), std({ map: leafT, flatShading: true })); b.position.set(x, 0.55, -0.3); b.scale.set(1.3, 0.85, 1); scene.add(b);
+  for (let k = 0; k < 7; k++) { const f = mesh(new THREE.SphereGeometry(0.09, 8, 6), std({ color: flowerCols[(k + Math.round(x)) & 3], roughness: 0.6 }), false);
+    const a = rnd() * Math.PI * 2; f.position.set(x + Math.cos(a) * 0.85, 0.75 + rnd() * 0.35, -0.3 + Math.sin(a) * 0.6); scene.add(f); }
+}
+// parked car on the far side of the road
+{ const car = new THREE.Group(), red = std({ color: "#2f7dd6", metalness: 0.35, roughness: 0.35 }), glass = std({ color: "#1d2b3a", metalness: 0.2, roughness: 0.15 }), tyre = std({ color: "#1b1d22" });
+  const body = mesh(rbox(4.2, 0.9, 1.9, 0.25), red); body.position.y = 0.75; car.add(body);
+  const cab = mesh(rbox(2.3, 0.8, 1.7, 0.25), red); cab.position.set(-0.2, 1.5, 0); car.add(cab);
+  const win = mesh(rbox(2.36, 0.55, 1.74, 0.18), glass); win.position.set(-0.2, 1.52, 0); car.add(win);
+  for (const [x, z] of [[1.3, 0.95], [-1.3, 0.95], [1.3, -0.95], [-1.3, -0.95]]) { const w = mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.3, 18), tyre); w.rotation.x = Math.PI / 2; w.position.set(x, 0.42, z); car.add(w); }
+  car.position.set(-7, 0, 12.6); scene.add(car); }
+// fire hydrant
+{ const hy = mesh(rbox(0.34, 0.7, 0.34, 0.08), std({ color: "#d63c2f", roughness: 0.45 })); hy.position.set(5.2, 0.47, 3.6); scene.add(hy);
+  const cap = mesh(new THREE.SphereGeometry(0.2, 12, 8), std({ color: "#d63c2f", roughness: 0.45 })); cap.position.set(5.2, 0.85, 3.6); scene.add(cap); }
 const lamp = mesh(new THREE.CylinderGeometry(0.08, 0.1, 5, 10), std({ color: "#2f3338", metalness: 0.6, roughness: 0.4 })); lamp.position.set(8.6, 2.5, 4.2); scene.add(lamp);
 
 // ---------------- grandpa's block house (in the neighbours' front yard) ----------------
@@ -233,7 +285,7 @@ const camKeys = [
   [[-0.7, 2.6, 9.4], [-0.7, 2.2, 1.4], [-0.7, 2.55, 8.4], [-0.7, 2.25, 1.4], 40],  // 1 neighbours laugh
   [[3.6, 1.1, 6.4], [0.4, 1.9, -0.6], [3.1, 1.2, 5.6], [0.4, 2.1, -0.6], 44],      // 2 sunrise, one block (low)
   [[7.5, 4.0, 6.5], [0.0, 1.4, -2.2], [6.2, 4.6, 5.6], [0.0, 1.6, -2.2], 44],      // 3 walls rise
-  [[-5.8, 2.4, 6.4], [0.0, 2.4, -2.2], [-4.6, 2.6, 5.4], [0.2, 2.6, -2.2], 44],     // 4 roof, door, mailbox
+  [[-8.6, 2.9, 9.2], [0.4, 2.3, -2.2], [-7.2, 3.1, 7.9], [0.6, 2.5, -2.2], 44],     // 4 roof, door, mailbox
   [[0.2, 2.6, 9.6], [-0.7, 2.2, 1.4], [0.2, 2.55, 8.6], [-0.7, 2.25, 1.4], 40],    // 5 nobody laughs
   [[1.5, 3.2, 12.5], [0.0, 2.6, -3.0], [3.2, 7.5, 17.0], [0.0, 2.8, -4.0], 46],     // 6 reveal: in their front yard
 ];
@@ -301,7 +353,7 @@ const render3D = (t) => {
     show(KID, { pos: [-5.0, 2.4], yaw: 0.6, ex: "shock" });
   }
   if (s !== 2) held.visible = false;
-  renderer.render(scene, cam);
+  composer.render();
 };
 
 // ---------------- captions (one word, coloured key words) ----------------
@@ -320,6 +372,24 @@ const drawCaption = (t) => {
   octx.restore();
 };
 
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType }));
+composer.setPixelRatio(1); composer.setSize(W, H);
+composer.addPass(new RenderPass(scene, cam));
+const ao = new GTAOPass(scene, cam, W, H); ao.blendIntensity = 0.85; ao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 1.4, thickness: 1.2, scale: 1.0, samples: 12 }); ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
+composer.addPass(ao);
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.22, 0.5, 0.92));
+composer.addPass(new OutputPass());
+composer.addPass(new ShaderPass({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main(){ vec4 c = texture2D(tDiffuse, vUv); vec3 x = c.rgb;
+      float l = dot(x, vec3(0.2126, 0.7152, 0.0722)); x = mix(vec3(l), x, 1.14);          // saturation
+      x = (x - 0.5) * 1.06 + 0.5;                                                          // contrast
+      float v = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)) * 1.1); x *= mix(0.82, 1.0, v); // vignette
+      gl_FragColor = vec4(clamp(x, 0.0, 1.0), c.a); }`,
+}));
+composer.addPass(new SMAAPass(W, H));
 window.render = (t) => {
   render3D(t);
   octx.drawImage(renderer.domElement, 0, 0);
